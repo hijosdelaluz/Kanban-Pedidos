@@ -1,23 +1,40 @@
 import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  query, 
+  orderBy 
+} from 'firebase/firestore';
 import { 
   Plus, 
   Search, 
-  Phone, 
   Package, 
-  Layers, 
-  User, 
-  Calendar, 
   Trash2, 
   Edit3, 
   ArrowRight, 
   ArrowLeft, 
-  CheckCircle2, 
-  Clock, 
-  Hammer,
-  MessageCircle,
-  X,
-  FileSpreadsheet
+  MessageCircle, 
+  X 
 } from 'lucide-react';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAJSW10brI9NTo-gJioSW3NvCU9C4M1-UE",
+  authDomain: "loshijosdelaluz.firebaseapp.com",
+  projectId: "loshijosdelaluz",
+  storageBucket: "loshijosdelaluz.firebasestorage.app",
+  messagingSenderId: "879813302890",
+  appId: "1:879813302890:web:87eb646382ba7e60ddc813",
+  measurementId: "G-FLJ5G45GQR"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 const COLUMNS = [
   { id: 'todo', title: 'Por Hacer', color: 'bg-amber-500/10 text-amber-500 border-amber-500/30' },
@@ -27,31 +44,7 @@ const COLUMNS = [
 ];
 
 export default function App() {
-  const [orders, setOrders] = useState(() => {
-    const saved = localStorage.getItem('taller_pedidos_kanban');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [
-      {
-        id: 'ord-evelautaro',
-        clientName: 'Seño Eve',
-        clientPhone: '',
-        product: 'Souvenirs Lautaro Martínez',
-        quantity: 1,
-        type: 'unit',
-        assignedTo: 'Yesi',
-        status: 'todo',
-        notes: '',
-        createdAt: new Date().toISOString()
-      }
-    ];
-  });
-
+  const [orders, setOrders] = useState([]);
   const [filterPerson, setFilterPerson] = useState(null);
   const [filterType, setFilterType] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -70,8 +63,19 @@ export default function App() {
   });
 
   useEffect(() => {
-    localStorage.setItem('taller_pedidos_kanban', JSON.stringify(orders));
-  }, [orders]);
+    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const items = [];
+      snapshot.forEach((docSnap) => {
+        items.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setOrders(items);
+    }, (error) => {
+      console.error("Error al escuchar cambios en Firestore:", error);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const handleOpenModal = (order = null) => {
     if (order) {
@@ -93,38 +97,51 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const handleSaveOrder = (e) => {
+  const handleSaveOrder = async (e) => {
     e.preventDefault();
     if (!formData.clientName.trim() || !formData.product.trim()) return;
 
-    if (editingOrder) {
-      setOrders(prev => prev.map(o => o.id === editingOrder.id ? { ...formData, id: o.id, createdAt: o.createdAt } : o));
-    } else {
-      const newOrder = {
-        ...formData,
-        id: 'ord-' + Date.now(),
-        createdAt: new Date().toISOString()
-      };
-      setOrders(prev => [newOrder, ...prev]);
-    }
-    setIsModalOpen(false);
-  };
-
-  const handleDelete = (id) => {
-    setOrders(prev => prev.filter(o => o.id !== id));
-  };
-
-  const handleMoveStatus = (id, direction) => {
-    const statusOrder = ['todo', 'in_progress', 'review', 'done'];
-    setOrders(prev => prev.map(o => {
-      if (o.id !== id) return o;
-      const currentIndex = statusOrder.indexOf(o.status);
-      const nextIndex = currentIndex + direction;
-      if (nextIndex >= 0 && nextIndex < statusOrder.length) {
-        return { ...o, status: statusOrder[nextIndex] };
+    try {
+      if (editingOrder) {
+        const orderRef = doc(db, 'orders', editingOrder.id);
+        const { id, ...dataToUpdate } = formData;
+        await updateDoc(orderRef, dataToUpdate);
+      } else {
+        await addDoc(collection(db, 'orders'), {
+          ...formData,
+          createdAt: new Date().toISOString()
+        });
       }
-      return o;
-    }));
+      setIsModalOpen(false);
+    } catch (err) {
+      console.error("Error al guardar pedido:", err);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'orders', id));
+    } catch (err) {
+      console.error("Error al eliminar pedido:", err);
+    }
+  };
+
+  const handleMoveStatus = async (id, direction) => {
+    const statusOrder = ['todo', 'in_progress', 'review', 'done'];
+    const current = orders.find(o => o.id === id);
+    if (!current) return;
+
+    const currentIndex = statusOrder.indexOf(current.status);
+    const nextIndex = currentIndex + direction;
+
+    if (nextIndex >= 0 && nextIndex < statusOrder.length) {
+      try {
+        const orderRef = doc(db, 'orders', id);
+        await updateDoc(orderRef, { status: statusOrder[nextIndex] });
+      } catch (err) {
+        console.error("Error al mover estado:", err);
+      }
+    }
   };
 
   const filteredOrders = orders.filter(o => {
@@ -140,69 +157,81 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20 px-4 py-3">
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-20 px-4 py-2.5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-indigo-600 rounded-lg shadow-md shadow-indigo-600/30">
-                <Layers className="w-5 h-5 text-white" />
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-white/95 px-2.5 py-1 rounded-xl shadow-md border border-amber-400/40">
+                <svg viewBox="0 0 100 100" className="w-6 h-6 shrink-0" fill="none">
+                  <circle cx="50" cy="50" r="22" fill="#F59E0B" />
+                  <path d="M50 8v14M50 78v14M8 50h14M78 50h14M20 20l10 10M70 70l10 10M20 80l10-10M70 30l10-10" stroke="#F59E0B" strokeWidth="5" strokeLinecap="round" />
+                </svg>
+                <div className="flex flex-col leading-none">
+                  <span className="font-extrabold text-xs tracking-tight bg-gradient-to-r from-orange-600 via-amber-500 to-yellow-500 bg-clip-text text-transparent">
+                    Los Hijos de la Luz
+                  </span>
+                  <span className="text-[7.5px] font-semibold text-sky-600 tracking-wider">
+                    SEMBRAR CON AMOR
+                  </span>
+                </div>
               </div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-300 to-indigo-100 bg-clip-text text-transparent">
-                Control de Pedidos
-              </h1>
+
+              <span className="text-slate-500 hidden sm:inline">|</span>
+              <h1 className="text-sm font-semibold text-slate-300 hidden sm:block">Control de Pedidos</h1>
             </div>
+
             <button
               onClick={() => handleOpenModal()}
-              className="md:hidden flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold active:scale-95"
+              className="md:hidden flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold active:scale-95 shadow-md shadow-indigo-600/30"
             >
-              <Plus className="w-4 h-4" /> Nuevo
+              <Plus className="w-3.5 h-3.5" /> Nuevo
             </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <div className="relative flex-1 min-w-[160px]">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar cliente o producto..."
+                placeholder="Buscar pedido..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                className="w-full pl-8 pr-3 py-1 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
               />
             </div>
 
-            <div className="flex items-center bg-slate-800/80 p-1 rounded-lg border border-slate-700/60 text-xs">
+            <div className="flex items-center bg-slate-800/90 p-0.5 rounded-lg border border-slate-700 text-xs">
               <button
                 onClick={() => setFilterPerson(filterPerson === 'Yesi' ? null : 'Yesi')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  filterPerson === 'Yesi' ? 'bg-pink-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 rounded-md font-semibold transition ${
+                  filterPerson === 'Yesi' ? 'bg-pink-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 Yesi
               </button>
               <button
                 onClick={() => setFilterPerson(filterPerson === 'Roci' ? null : 'Roci')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  filterPerson === 'Roci' ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 rounded-md font-semibold transition ${
+                  filterPerson === 'Roci' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 Roci
               </button>
             </div>
 
-            <div className="flex items-center bg-slate-800/80 p-1 rounded-lg border border-slate-700/60 text-xs">
+            <div className="flex items-center bg-slate-800/90 p-0.5 rounded-lg border border-slate-700 text-xs">
               <button
                 onClick={() => setFilterType(filterType === 'unit' ? null : 'unit')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  filterType === 'unit' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 rounded-md font-semibold transition ${
+                  filterType === 'unit' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 Unitario
               </button>
               <button
                 onClick={() => setFilterType(filterType === 'kit' ? null : 'kit')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  filterType === 'kit' ? 'bg-violet-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 rounded-md font-semibold transition ${
+                  filterType === 'kit' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 Kit
@@ -211,9 +240,9 @@ export default function App() {
 
             <button
               onClick={() => handleOpenModal()}
-              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold shadow-sm transition"
+              className="hidden md:flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow transition"
             >
-              <Plus className="w-4 h-4" /> Nuevo Pedido
+              <Plus className="w-3.5 h-3.5" /> Nuevo Pedido
             </button>
           </div>
         </div>
@@ -226,30 +255,30 @@ export default function App() {
             return (
               <div 
                 key={col.id} 
-                className="w-80 md:w-88 flex flex-col bg-slate-900/60 border border-slate-800/80 rounded-xl max-h-[calc(100vh-140px)] shadow-lg"
+                className="w-80 flex flex-col bg-slate-900/60 border border-slate-800/80 rounded-xl max-h-[calc(100vh-140px)] shadow-lg"
               >
-                <div className="p-3.5 border-b border-slate-800/60 flex items-center justify-between sticky top-0 bg-slate-900 rounded-t-xl z-10">
+                <div className="p-3 border-b border-slate-800/60 flex items-center justify-between sticky top-0 bg-slate-900 rounded-t-xl z-10">
                   <div className="flex items-center gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${col.color}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${col.color}`}>
                       {colOrders.length}
                     </span>
-                    <h2 className="font-semibold text-sm text-slate-200">{col.title}</h2>
+                    <h2 className="font-semibold text-xs text-slate-200 uppercase tracking-wider">{col.title}</h2>
                   </div>
                 </div>
 
                 <div className="p-3 flex-1 overflow-y-auto space-y-3">
                   {colOrders.length === 0 ? (
-                    <div className="h-32 flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-lg text-slate-500 text-xs">
+                    <div className="h-28 flex flex-col items-center justify-center border border-dashed border-slate-800/80 rounded-lg text-slate-500 text-xs">
                       Sin pedidos
                     </div>
                   ) : (
                     colOrders.map(order => (
                       <div
                         key={order.id}
-                        className="p-3.5 bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 rounded-xl shadow-sm transition group"
+                        className="p-3.5 bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 rounded-xl shadow-sm transition"
                       >
                         <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <h3 className="font-semibold text-slate-100 text-sm leading-tight">
+                          <h3 className="font-bold text-slate-100 text-sm leading-tight">
                             {order.clientName}
                           </h3>
                           <span
@@ -266,13 +295,13 @@ export default function App() {
                         <div className="flex items-center gap-1.5 text-xs text-indigo-300 font-medium mb-2">
                           <Package className="w-3.5 h-3.5 shrink-0" />
                           <span>{order.quantity} × {order.product}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 bg-slate-700 text-slate-300 rounded ml-auto">
+                          <span className="text-[10px] px-1.5 py-0.2 bg-slate-700/70 text-slate-300 rounded ml-auto">
                             {order.type === 'kit' ? 'Kit' : 'Unitario'}
                           </span>
                         </div>
 
                         {order.notes && (
-                          <p className="text-xs text-slate-400 bg-slate-900/40 p-2 rounded mb-2 border border-slate-800">
+                          <p className="text-xs text-slate-300 bg-slate-900/60 p-2 rounded mb-2 border border-slate-800">
                             {order.notes}
                           </p>
                         )}
@@ -350,20 +379,20 @@ export default function App() {
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-lg font-bold text-slate-100 mb-4">
+            <h3 className="text-base font-bold text-slate-100 mb-3">
               {editingOrder ? 'Modificar Pedido' : 'Registrar Nuevo Pedido'}
             </h3>
 
-            <form onSubmit={handleSaveOrder} className="space-y-3.5">
+            <form onSubmit={handleSaveOrder} className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Nombre del Cliente *</label>
                 <input
                   type="text"
                   required
-                  placeholder="Ej: Seño Eve"
+                  placeholder="Ej: Maestra Eve"
                   value={formData.clientName}
                   onChange={(e) => setFormData({ ...formData, clientName: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
@@ -374,7 +403,7 @@ export default function App() {
                   placeholder="Ej: +54 9 261..."
                   value={formData.clientPhone}
                   onChange={(e) => setFormData({ ...formData, clientPhone: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
@@ -387,7 +416,7 @@ export default function App() {
                     placeholder="Ej: Souvenirs Lautaro Martínez"
                     value={formData.product}
                     onChange={(e) => setFormData({ ...formData, product: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -398,19 +427,19 @@ export default function App() {
                     required
                     value={formData.quantity}
                     onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Tipo de Producto</label>
-                  <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Tipo</label>
+                  <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, type: 'unit' })}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition ${
+                      className={`flex-1 py-1 text-xs font-medium rounded-md transition ${
                         formData.type === 'unit' ? 'bg-indigo-600 text-white' : 'text-slate-400'
                       }`}
                     >
@@ -419,7 +448,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, type: 'kit' })}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition ${
+                      className={`flex-1 py-1 text-xs font-medium rounded-md transition ${
                         formData.type === 'kit' ? 'bg-indigo-600 text-white' : 'text-slate-400'
                       }`}
                     >
@@ -429,12 +458,12 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Toma el Pedido</label>
-                  <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Toma Pedido</label>
+                  <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, assignedTo: 'Yesi' })}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition ${
+                      className={`flex-1 py-1 text-xs font-medium rounded-md transition ${
                         formData.assignedTo === 'Yesi' ? 'bg-pink-600 text-white' : 'text-slate-400'
                       }`}
                     >
@@ -443,7 +472,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, assignedTo: 'Roci' })}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition ${
+                      className={`flex-1 py-1 text-xs font-medium rounded-md transition ${
                         formData.assignedTo === 'Roci' ? 'bg-cyan-600 text-white' : 'text-slate-400'
                       }`}
                     >
@@ -454,13 +483,13 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Notas adicionales</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Notas</label>
                 <textarea
                   rows="2"
-                  placeholder="Detalles, colores, señas o acuerdos..."
+                  placeholder="Detalles, fecha de entrega..."
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500 resize-none"
+                  className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-indigo-500 resize-none"
                 />
               </div>
 
@@ -468,13 +497,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition"
+                  className="flex-1 py-1.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-semibold"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold transition shadow-md shadow-indigo-600/30"
+                  className="flex-1 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-600/30"
                 >
                   Guardar
                 </button>
